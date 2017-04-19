@@ -1,0 +1,99 @@
+# Run configure to generate Makefile from Makefile.in on
+# any system supported by GNU autoconf.  For all other
+# systems, use this file as a template to create a
+# working Makefile.
+
+CC = @CC@
+CFLAGS = @CFLAGS@ -Wall -Werror -Wstrict-prototypes -Wmissing-prototypes -g -fPIC
+
+LIBS = @LIBS@ -lm
+
+AR = @AR@
+RANLIB = @RANLIB@
+
+OSARCH=$(shell uname -s)
+PROC?=$(shell uname -m)
+
+SONAME:=1.0
+DYNAMIC_LIBRARY:=libresample.so.$(SONAME)
+
+SOFLAGS:=-Wl,-h$(DYNAMIC_LIBRARY)
+
+INSTALL_BASE:=/usr
+INSTALL_PREFIX:=$(DESTDIR)
+LDCONFIG:=/sbin/ldconfig
+
+ifneq (,$(findstring X$(OSARCH)X, XLinuxX XGNU/kFreeBSDX))
+ LDCONFIG_FLAGS:=-n
+else
+ ifeq (${OSARCH},FreeBSD)
+  LDCONFIG_FLAGS:=-m
+  INSTALL_BASE:=/usr/local
+ endif
+endif
+
+ifeq (${OSARCH},SunOS)
+LDCONFIG:= 
+LDCONFIG_FLAGS:= \# # Trick to comment out the period in the command below
+#INSTALL_PREFIX:=/opt/asterisk  # Uncomment out to install in standard Solaris location for 3rd party code
+endif
+
+OBJS = \
+	src/resample.c.o \
+	src/resamplesubs.c.o \
+	src/filterkit.c.o
+
+TARGETS:=$(DYNAMIC_LIBRARY)
+
+all: $(TARGETS)
+
+libresample.a: $(OBJS) Makefile
+	$(AR) ruv libresample.a $(OBJS)
+	ranlib libresample.a
+
+$(DYNAMIC_LIBRARY): $(OBJS)
+	$(CC) -shared $(SOFLAGS) -o $@ $^
+	$(LDCONFIG) $(LDCONFIG_FLAGS) .
+	ln -sf $(DYNAMIC_LIBRARY) libresample.so
+
+install: all
+	mkdir -p $(INSTALL_PREFIX)$(INSTALL_BASE)/lib
+	mkdir -p $(INSTALL_PREFIX)$(INSTALL_BASE)/include
+ifneq (${OSARCH},SunOS)
+	install -m 644 include/libresample.h $(INSTALL_PREFIX)$(INSTALL_BASE)/include
+	install -m 755 $(DYNAMIC_LIBRARY) $(INSTALL_PREFIX)$(INSTALL_BASE)/lib
+	if [ -x /usr/sbin/sestatus ] && ( /usr/sbin/sestatus | grep "SELinux status:" | grep -q "enabled"); then /sbin/restorecon -v $(INSTALL_PREFIX)$(INSTALL_BASE)/lib/$(DYNAMIC_LIBRARY); fi
+	( cd $(INSTALL_PREFIX)$(INSTALL_BASE)/lib ; ln -sf $(DYNAMIC_LIBRARY) libresample.so)
+	if test $$(id -u) = 0; then $(LDCONFIG) $(LDCONFIG_FLAGS) $(INSTALL_PREFIX)$(INSTALL_BASE)/lib; fi
+else
+	install -f $(INSTALL_PREFIX)$(INSTALL_BASE)/include -m 644 include/libresample.h
+	install -f $(INSTALL_PREFIX)$(INSTALL_BASE)/lib -m 755 $(DYNAMIC_LIBRARY)
+	( cd $(INSTALL_PREFIX)$(INSTALL_BASE)/lib ; ln -sf $(DYNAMIC_LIBRARY) libresample.so)
+endif
+
+tests/testresample: libresample.a tests/testresample.c
+	$(CC) -o tests/testresample \
+		$(CFLAGS) tests/testresample.c \
+		libresample.a $(LIBS)
+
+tests/compareresample: libresample.a tests/compareresample.c
+	$(CC) -o tests/compareresample \
+		$(CFLAGS) tests/compareresample.c \
+		libresample.a -lsamplerate $(LIBS)
+
+tests/resample-sndfile: libresample.a tests/resample-sndfile.c
+	$(CC) -o tests/resample-sndfile \
+		$(CFLAGS) tests/resample-sndfile.c \
+		libresample.a -lsndfile $(LIBS)
+
+clean:
+	rm -f $(TARGETS) $(OBJS) libresample.so
+
+distclean: clean
+	rm -f Makefile
+	rm -f config.status config.cache config.log src/config.h
+	rm -f *~ src/*~ tests/*~ include/*~
+
+%.c.o: %.c Makefile include/libresample.h \
+	src/resample_defs.h src/filterkit.h src/config.h
+	$(CC) -c $(CFLAGS) $< -o $@
